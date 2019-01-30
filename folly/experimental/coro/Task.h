@@ -73,7 +73,7 @@ class TaskPromiseBase {
   friend class FinalAwaiter;
 
  protected:
-  TaskPromiseBase() noexcept : executor_(nullptr) {}
+  TaskPromiseBase() noexcept {}
 
  public:
   std::experimental::suspend_always initial_suspend() noexcept {
@@ -90,11 +90,11 @@ class TaskPromiseBase {
   template <typename Awaitable>
   auto await_transform(Awaitable&& awaitable) noexcept {
     using folly::coro::co_viaIfAsync;
-    return co_viaIfAsync(executor_, static_cast<Awaitable&&>(awaitable));
+    return co_viaIfAsync(executor_.get(), static_cast<Awaitable&&>(awaitable));
   }
 
   auto await_transform(co_current_executor_t) noexcept {
-    return AwaitableReady<folly::Executor*>{executor_};
+    return AwaitableReady<folly::Executor*>{executor_.get()};
   }
 
  private:
@@ -105,7 +105,7 @@ class TaskPromiseBase {
   friend class folly::coro::Task;
 
   std::experimental::coroutine_handle<> continuation_;
-  folly::Executor* executor_;
+  folly::Executor::KeepAlive<> executor_;
 };
 
 template <typename T>
@@ -191,7 +191,7 @@ class FOLLY_NODISCARD TaskWithExecutor {
   }
 
   folly::Executor* executor() const noexcept {
-    return coro_.promise().executor_;
+    return coro_.promise().executor_.get();
   }
 
   void swap(TaskWithExecutor& t) noexcept {
@@ -204,18 +204,26 @@ class FOLLY_NODISCARD TaskWithExecutor {
     Promise<lift_unit_t<T>> p;
     auto sf = p.getSemiFuture();
 
-    [](Promise<lift_unit_t<T>> p,
-       TaskWithExecutor task) -> detail::InlineTaskDetached {
-      try {
-        p.setTry(co_await std::move(task).co_awaitTry());
-      } catch (const std::exception& e) {
-        p.setException(exception_wrapper(std::current_exception(), e));
-      } catch (...) {
-        p.setException(exception_wrapper(std::current_exception()));
-      }
-    }(std::move(p), std::move(*this));
+    std::move(*this).start([promise = std::move(p)](Try<T>&& result) mutable {
+      promise.setTry(std::move(result));
+    });
 
     return sf;
+  }
+
+  // Start execution of this task eagerly and call the callback when complete.
+  template <typename F>
+  void start(F&& tryCallback) && {
+    [](TaskWithExecutor task,
+       std::decay_t<F> cb) -> detail::InlineTaskDetached {
+      try {
+        cb(co_await std::move(task).co_awaitTry());
+      } catch (const std::exception& e) {
+        cb(Try<T>(exception_wrapper(std::current_exception(), e)));
+      } catch (...) {
+        cb(Try<T>(exception_wrapper(std::current_exception())));
+      }
+    }(std::move(*this), std::forward<F>(tryCallback));
   }
 
   template <typename ResultCreator>
@@ -237,7 +245,7 @@ class FOLLY_NODISCARD TaskWithExecutor {
         std::experimental::coroutine_handle<> continuation) noexcept {
       auto& promise = coro_.promise();
       DCHECK(!promise.continuation_);
-      DCHECK(promise.executor_ != nullptr);
+      DCHECK(promise.executor_);
 
       promise.continuation_ = continuation;
       promise.executor_->add(
@@ -344,7 +352,7 @@ class FOLLY_NODISCARD Task {
   /// task on the specified executor.
   FOLLY_NODISCARD
   TaskWithExecutor<T> scheduleOn(Executor* executor) && noexcept {
-    coro_.promise().executor_ = executor;
+    coro_.promise().executor_ = getKeepAliveToken(executor);
     return TaskWithExecutor<T>{std::exchange(coro_, {})};
   }
 
@@ -404,7 +412,7 @@ auto detail::TaskPromiseBase::await_transform(Task<T>&& t) noexcept {
   };
 
   // Child task inherits the awaiting task's executor
-  t.coro_.promise().executor_ = executor_;
+  t.coro_.promise().executor_ = executor_.copyDummy();
 
   return Awaiter{std::exchange(t.coro_, {})};
 }

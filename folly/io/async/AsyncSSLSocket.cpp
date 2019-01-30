@@ -326,7 +326,7 @@ void AsyncSSLSocket::init() {
 
 void AsyncSSLSocket::closeNow() {
   // Close the SSL connection.
-  if (ssl_ != nullptr && fd_ != NetworkSocket()) {
+  if (ssl_ != nullptr && fd_ != NetworkSocket() && !waitingOnAccept_) {
     int rc = SSL_shutdown(ssl_.get());
     if (rc == 0) {
       rc = SSL_shutdown(ssl_.get());
@@ -1148,8 +1148,14 @@ void AsyncSSLSocket::handleAccept() noexcept {
       EventHandler::NONE, EventHandler::READ | EventHandler::WRITE);
   DelayedDestruction::DestructorGuard dg(this);
   ctx_->sslAcceptRunner()->run(
-      [this, dg]() { return SSL_accept(ssl_.get()); },
-      [this, dg](int ret) { handleReturnFromSSLAccept(ret); });
+      [this, dg]() {
+        waitingOnAccept_ = true;
+        return SSL_accept(ssl_.get());
+      },
+      [this, dg](int ret) {
+        waitingOnAccept_ = false;
+        handleReturnFromSSLAccept(ret);
+      });
 }
 
 void AsyncSSLSocket::handleReturnFromSSLAccept(int ret) {
@@ -1325,35 +1331,6 @@ void AsyncSSLSocket::scheduleConnectTimeout() {
   AsyncSocket::scheduleConnectTimeout();
 }
 
-void AsyncSSLSocket::setReadCB(ReadCallback* callback) {
-#ifdef SSL_MODE_MOVE_BUFFER_OWNERSHIP
-  // turn on the buffer movable in openssl
-  if (bufferMovableEnabled_ && ssl_ != nullptr && !isBufferMovable_ &&
-      callback != nullptr && callback->isBufferMovable()) {
-    SSL_set_mode(
-        ssl_.get(), SSL_get_mode(ssl_.get()) | SSL_MODE_MOVE_BUFFER_OWNERSHIP);
-    isBufferMovable_ = true;
-  }
-#endif
-
-  AsyncSocket::setReadCB(callback);
-}
-
-void AsyncSSLSocket::setBufferMovableEnabled(bool enabled) {
-  bufferMovableEnabled_ = enabled;
-}
-
-void AsyncSSLSocket::prepareReadBuffer(void** buf, size_t* buflen) {
-  CHECK(readCallback_);
-  if (isBufferMovable_) {
-    *buf = nullptr;
-    *buflen = 0;
-  } else {
-    // buf is necessary for SSLSocket without SSL_MODE_MOVE_BUFFER_OWNERSHIP
-    readCallback_->getReadBuffer(buf, buflen);
-  }
-}
-
 void AsyncSSLSocket::handleRead() noexcept {
   VLOG(5) << "AsyncSSLSocket::handleRead() this=" << this << ", fd=" << fd_
           << ", state=" << int(state_) << ", "
@@ -1385,15 +1362,7 @@ AsyncSSLSocket::performRead(void** buf, size_t* buflen, size_t* offset) {
     return AsyncSocket::performRead(buf, buflen, offset);
   }
 
-  int bytes = 0;
-  if (!isBufferMovable_) {
-    bytes = SSL_read(ssl_.get(), *buf, int(*buflen));
-  }
-#ifdef SSL_MODE_MOVE_BUFFER_OWNERSHIP
-  else {
-    bytes = SSL_read_buf(ssl_.get(), buf, (int*)offset, (int*)buflen);
-  }
-#endif
+  int bytes = SSL_read(ssl_.get(), *buf, int(*buflen));
 
   if (server_ && renegotiateAttempted_) {
     LOG(ERROR) << "AsyncSSLSocket(fd=" << fd_ << ", state=" << int(state_)
@@ -1687,6 +1656,12 @@ void AsyncSSLSocket::sslInfoCallback(const SSL* ssl, int where, int ret) {
   AsyncSSLSocket* sslSocket = AsyncSSLSocket::getFromSSL(ssl);
   if (sslSocket->handshakeComplete_ && (where & SSL_CB_HANDSHAKE_START)) {
     sslSocket->renegotiateAttempted_ = true;
+  }
+  if (sslSocket->handshakeComplete_ && (where & SSL_CB_WRITE_ALERT)) {
+    const char* desc = SSL_alert_desc_string(ret);
+    if (desc && strcmp(desc, "NR") == 0) {
+      sslSocket->renegotiateAttempted_ = true;
+    }
   }
   if (where & SSL_CB_READ_ALERT) {
     const char* type = SSL_alert_type_string(ret);

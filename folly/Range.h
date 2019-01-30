@@ -112,32 +112,6 @@ inline size_t qfind_first_of(
  */
 namespace detail {
 
-/**
- * For random-access iterators, the value before is simply i[-1].
- */
-template <class Iter>
-typename std::enable_if<
-    std::is_same<
-        typename std::iterator_traits<Iter>::iterator_category,
-        std::random_access_iterator_tag>::value,
-    typename std::iterator_traits<Iter>::reference>::type
-value_before(Iter i) {
-  return i[-1];
-}
-
-/**
- * For all other iterators, we need to use the decrement operator.
- */
-template <class Iter>
-typename std::enable_if<
-    !std::is_same<
-        typename std::iterator_traits<Iter>::iterator_category,
-        std::random_access_iterator_tag>::value,
-    typename std::iterator_traits<Iter>::reference>::type
-value_before(Iter i) {
-  return *--i;
-}
-
 /*
  * Use IsCharPointer<T>::type to enable const char* or char*.
  * Use IsCharPointer<T>::const_type to enable only const char*.
@@ -485,7 +459,7 @@ class Range {
   }
   value_type& back() {
     assert(b_ < e_);
-    return detail::value_before(e_);
+    return *std::prev(e_);
   }
   const value_type& front() const {
     assert(b_ < e_);
@@ -493,7 +467,7 @@ class Range {
   }
   const value_type& back() const {
     assert(b_ < e_);
-    return detail::value_before(e_);
+    return *std::prev(e_);
   }
 
  private:
@@ -1265,8 +1239,9 @@ struct ComparableAsStringPiece {
  * operator== through conversion for Range<const char*>
  */
 template <class T, class U>
-_t<std::enable_if<detail::ComparableAsStringPiece<T, U>::value, bool>>
-operator==(const T& lhs, const U& rhs) {
+std::enable_if_t<detail::ComparableAsStringPiece<T, U>::value, bool> operator==(
+    const T& lhs,
+    const U& rhs) {
   return StringPiece(lhs) == StringPiece(rhs);
 }
 
@@ -1274,8 +1249,9 @@ operator==(const T& lhs, const U& rhs) {
  * operator!= through conversion for Range<const char*>
  */
 template <class T, class U>
-_t<std::enable_if<detail::ComparableAsStringPiece<T, U>::value, bool>>
-operator!=(const T& lhs, const U& rhs) {
+std::enable_if_t<detail::ComparableAsStringPiece<T, U>::value, bool> operator!=(
+    const T& lhs,
+    const U& rhs) {
   return StringPiece(lhs) != StringPiece(rhs);
 }
 
@@ -1283,8 +1259,9 @@ operator!=(const T& lhs, const U& rhs) {
  * operator< through conversion for Range<const char*>
  */
 template <class T, class U>
-_t<std::enable_if<detail::ComparableAsStringPiece<T, U>::value, bool>>
-operator<(const T& lhs, const U& rhs) {
+std::enable_if_t<detail::ComparableAsStringPiece<T, U>::value, bool> operator<(
+    const T& lhs,
+    const U& rhs) {
   return StringPiece(lhs) < StringPiece(rhs);
 }
 
@@ -1292,8 +1269,9 @@ operator<(const T& lhs, const U& rhs) {
  * operator> through conversion for Range<const char*>
  */
 template <class T, class U>
-_t<std::enable_if<detail::ComparableAsStringPiece<T, U>::value, bool>>
-operator>(const T& lhs, const U& rhs) {
+std::enable_if_t<detail::ComparableAsStringPiece<T, U>::value, bool> operator>(
+    const T& lhs,
+    const U& rhs) {
   return StringPiece(lhs) > StringPiece(rhs);
 }
 
@@ -1301,8 +1279,9 @@ operator>(const T& lhs, const U& rhs) {
  * operator< through conversion for Range<const char*>
  */
 template <class T, class U>
-_t<std::enable_if<detail::ComparableAsStringPiece<T, U>::value, bool>>
-operator<=(const T& lhs, const U& rhs) {
+std::enable_if_t<detail::ComparableAsStringPiece<T, U>::value, bool> operator<=(
+    const T& lhs,
+    const U& rhs) {
   return StringPiece(lhs) <= StringPiece(rhs);
 }
 
@@ -1310,8 +1289,9 @@ operator<=(const T& lhs, const U& rhs) {
  * operator> through conversion for Range<const char*>
  */
 template <class T, class U>
-_t<std::enable_if<detail::ComparableAsStringPiece<T, U>::value, bool>>
-operator>=(const T& lhs, const U& rhs) {
+std::enable_if_t<detail::ComparableAsStringPiece<T, U>::value, bool> operator>=(
+    const T& lhs,
+    const U& rhs) {
   return StringPiece(lhs) >= StringPiece(rhs);
 }
 

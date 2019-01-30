@@ -738,7 +738,7 @@ class SemiFuture : private futures::detail::FutureBase<T> {
   ///     throw std::runtime_error("oh no!");
   ///     return 42;
   ///   })
-  ///   .deferError<std::runtime_error>([] (auto const& e) {
+  ///   .deferError(folly::tag_t<std::runtime_error>{}, [] (auto const& e) {
   ///     LOG(INFO) << "std::runtime_error: " << e.what();
   ///     return -1; // or makeFuture<int>(-1) or makeSemiFuture<int>(-1)
   ///   });
@@ -753,11 +753,17 @@ class SemiFuture : private futures::detail::FutureBase<T> {
   /// - `valid() == false`
   /// - `RESULT.valid() == true`
   template <class ExceptionType, class F>
-  SemiFuture<T> deferError(F&& func) &&;
+  SemiFuture<T> deferError(tag_t<ExceptionType>, F&& func) &&;
 
   template <class ExceptionType, class R, class... Args>
-  SemiFuture<T> deferError(R (&func)(Args...)) && {
-    return std::move(*this).template deferError<ExceptionType>(&func);
+  SemiFuture<T> deferError(tag_t<ExceptionType> tag, R (&func)(Args...)) && {
+    return std::move(*this).deferError(tag, &func);
+  }
+
+  template <class ExceptionType, class F>
+  SemiFuture<T> deferError(F&& func) && {
+    return std::move(*this).deferError(
+        tag_t<ExceptionType>{}, std::forward<F>(func));
   }
 
   /// Set an error continuation for this SemiFuture where the continuation can
@@ -1309,7 +1315,7 @@ class Future : private futures::detail::FutureBase<T> {
   ///       throw std::runtime_error("oh no!");
   ///       return 42;
   ///     })
-  ///     .thenError<std::runtime_error>([] (auto const& e) {
+  ///     .thenError(folly::tag_t<std::runtime_error>{}, [] (auto const& e) {
   ///       LOG(INFO) << "std::runtime_error: " << e.what();
   ///       return -1; // or makeFuture<int>(-1) or makeSemiFuture<int>(-1)
   ///     });
@@ -1323,11 +1329,26 @@ class Future : private futures::detail::FutureBase<T> {
   /// - `valid() == false`
   /// - `RESULT.valid() == true`
   template <class ExceptionType, class F>
-  Future<T> thenError(F&& func) &&;
+  typename std::enable_if<
+      isFutureOrSemiFuture<invoke_result_t<F, ExceptionType>>::value,
+      Future<T>>::type
+  thenError(tag_t<ExceptionType>, F&& func) &&;
+
+  template <class ExceptionType, class F>
+  typename std::enable_if<
+      !isFutureOrSemiFuture<invoke_result_t<F, ExceptionType>>::value,
+      Future<T>>::type
+  thenError(tag_t<ExceptionType>, F&& func) &&;
 
   template <class ExceptionType, class R, class... Args>
-  Future<T> thenError(R (&func)(Args...)) && {
-    return std::move(*this).template thenError<ExceptionType>(&func);
+  Future<T> thenError(tag_t<ExceptionType> tag, R (&func)(Args...)) && {
+    return std::move(*this).thenError(tag, &func);
+  }
+
+  template <class ExceptionType, class F>
+  Future<T> thenError(F&& func) && {
+    return std::move(*this).thenError(
+        tag_t<ExceptionType>{}, std::forward<F>(func));
   }
 
   /// Set an error continuation for this Future where the continuation can
@@ -1355,7 +1376,16 @@ class Future : private futures::detail::FutureBase<T> {
   /// - `valid() == false`
   /// - `RESULT.valid() == true`
   template <class F>
-  Future<T> thenError(F&& func) &&;
+  typename std::enable_if<
+      isFutureOrSemiFuture<invoke_result_t<F, exception_wrapper>>::value,
+      Future<T>>::type
+  thenError(F&& func) &&;
+
+  template <class F>
+  typename std::enable_if<
+      !isFutureOrSemiFuture<invoke_result_t<F, exception_wrapper>>::value,
+      Future<T>>::type
+  thenError(F&& func) &&;
 
   template <class R, class... Args>
   Future<T> thenError(R (&func)(Args...)) && {
@@ -1494,6 +1524,11 @@ class Future : private futures::detail::FutureBase<T> {
           !futures::detail::Extract<F>::ReturnsFuture::value,
       Future<T>>::type
   onError(F&& func) &&;
+
+  template <class R, class... Args>
+  Future<T> onError(R (&func)(Args...)) && {
+    return std::move(*this).onError(&func);
+  }
 
   // clang-format off
   template <class F>
@@ -2023,23 +2058,28 @@ class FutureAwaitable {
   explicit FutureAwaitable(folly::Future<T>&& future) noexcept
       : future_(std::move(future)) {}
 
-  bool await_ready() const {
-    return future_.isReady();
+  bool await_ready() {
+    if (future_.isReady()) {
+      result_ = std::move(future_.getTry());
+      return true;
+    }
+    return false;
   }
 
   T await_resume() {
-    return std::move(future_).value();
+    return std::move(result_).value();
   }
 
   void await_suspend(std::experimental::coroutine_handle<> h) {
-    future_.setCallback_([h](Try<T>&&) mutable {
-      // Don't std::move() so the try is left in the future for await_resume()
+    future_.setCallback_([this, h](Try<T>&& result) mutable {
+      result_ = std::move(result);
       h.resume();
     });
   }
 
  private:
   folly::Future<T> future_;
+  folly::Try<T> result_;
 };
 
 } // namespace detail

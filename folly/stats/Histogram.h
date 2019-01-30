@@ -223,12 +223,7 @@ class HistogramBuckets {
   }
 
  private:
-  template <typename V>
-  bool less(const V& lhs, const V& rhs) const {
-    using nl = std::numeric_limits<V>;
-    return lhs < rhs && (nl::is_integer || rhs - lhs > nl::epsilon());
-  }
-
+  static constexpr bool kIsExact = std::numeric_limits<ValueType>::is_exact;
   ValueType bucketSize_;
   ValueType min_;
   ValueType max_;
@@ -481,8 +476,8 @@ class Histogram {
 
  private:
   template <typename S, typename = std::enable_if_t<std::is_integral<S>::value>>
-  static constexpr _t<std::make_unsigned<S>> to_unsigned(S s) {
-    return static_cast<_t<std::make_unsigned<S>>>(s);
+  static constexpr std::make_unsigned_t<S> to_unsigned(S s) {
+    return static_cast<std::make_unsigned_t<S>>(s);
   }
   template <
       typename S,

@@ -355,7 +355,7 @@ class Optional {
 
  private:
   template <class T>
-  friend constexpr Optional<_t<std::decay<T>>> make_optional(T&&);
+  friend constexpr Optional<std::decay_t<T>> make_optional(T&&);
   template <class T, class... Args>
   friend constexpr Optional<T> make_optional(Args&&... args);
   template <class T, class U, class... As>
@@ -412,17 +412,10 @@ class Optional {
     };
     bool hasValue;
 
-    FOLLY_PUSH_WARNING
-    // These are both informational warnings, but they trigger rare
-    // enough that we've left them enabled. Needed as long as MSVC
-    // 2015 is supported.
-    FOLLY_MSVC_DISABLE_WARNING(4587) // constructor of .value is not called
-    FOLLY_MSVC_DISABLE_WARNING(4588) // destructor of .value is not called
     StorageNonTriviallyDestructible() : hasValue{false} {}
     ~StorageNonTriviallyDestructible() {
       clear();
     }
-    FOLLY_POP_WARNING
 
     void clear() {
       if (hasValue) {
@@ -456,9 +449,9 @@ void swap(Optional<T>& a, Optional<T>& b) noexcept(noexcept(a.swap(b))) {
 }
 
 template <class T>
-constexpr Optional<_t<std::decay<T>>> make_optional(T&& v) {
+constexpr Optional<std::decay_t<T>> make_optional(T&& v) {
   using PrivateConstructor =
-      typename folly::Optional<_t<std::decay<T>>>::PrivateConstructor;
+      typename folly::Optional<std::decay_t<T>>::PrivateConstructor;
   return {PrivateConstructor{}, std::forward<T>(v)};
 }
 
